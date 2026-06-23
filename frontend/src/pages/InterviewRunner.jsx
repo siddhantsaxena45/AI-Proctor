@@ -116,6 +116,37 @@ function InterviewRunner() {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [hasJoined, isTerminated]);
 
+  // Anti-Cheat: Clipboard, Context Menu, PrintScreen
+  useEffect(() => {
+    if (isTerminated) return;
+    const handleCopyPaste = (e) => {
+       e.preventDefault();
+       toast.error("Violation: Copy/Paste is disabled during the interview.", { position: "top-center", toastId: 'copypaste' });
+    };
+    const handleContextMenu = (e) => {
+       e.preventDefault();
+       toast.error("Violation: Right-click is disabled.", { position: "top-center", toastId: 'contextmenu' });
+    };
+    const handleKeyUp = (e) => {
+       if (e.key === 'PrintScreen' && hasJoined) {
+          setViolationCount(v => v + 1);
+          toast.error("Violation: Screenshots are prohibited!", { position: "top-center", toastId: 'screenshot' });
+       }
+    };
+
+    document.addEventListener('copy', handleCopyPaste);
+    document.addEventListener('paste', handleCopyPaste);
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+       document.removeEventListener('copy', handleCopyPaste);
+       document.removeEventListener('paste', handleCopyPaste);
+       document.removeEventListener('contextmenu', handleContextMenu);
+       document.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [hasJoined, isTerminated]);
+
   // AI Proctor Loader
   useEffect(() => {
     const poll = setInterval(async () => {
@@ -158,13 +189,19 @@ function InterviewRunner() {
            if (videoRef.current?.readyState === 4) {
               try {
                 const predictions = await model.detect(videoRef.current);
-                const hasPerson = predictions.some(p => p.class === 'person');
+                const personsCount = predictions.filter(p => p.class === 'person').length;
+                const hasPerson = personsCount > 0;
+                const hasMultiplePersons = personsCount > 1;
                 const hasPhone = predictions.some(p => p.class === 'cell phone');
                 
                 if (hasPhone) {
                   setProctorWarning("SECURITY ALERT: Cell phone detected!");
                   setViolationCount(v => v + 1);
                   toast.error("Violation: Mobile phone use prohibited.");
+                } else if (hasMultiplePersons) {
+                  setProctorWarning("SECURITY ALERT: Multiple faces detected!");
+                  setViolationCount(v => v + 1);
+                  toast.error("Violation: Multiple people detected in frame.");
                 } else if (!hasPerson) {
                    faceLossCounterRef.current += 1;
                    if (faceLossCounterRef.current >= 2) { 
@@ -305,7 +342,7 @@ function InterviewRunner() {
         videoStreamRef.current = null;
     }
 
-    dispatch(endSession(sessionId)).unwrap().then(() => {
+    dispatch(endSession({ sessionId, violations: violationCount })).unwrap().then(() => {
         localStorage.removeItem(`drafts_${sessionId}`);
     });
   };
@@ -350,7 +387,7 @@ function InterviewRunner() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans select-none">
       <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center z-20 sticky top-0 shadow-xl">
         <div className="flex items-center gap-4">
           <div className={`w-12 h-12 bg-white/5 flex items-center justify-center rounded-xl border border-white/10 ${isSpeaking ? 'ring-2 ring-teal-500' : ''}`}>

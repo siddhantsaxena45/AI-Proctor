@@ -5,12 +5,17 @@ import { useParams, Link } from 'react-router-dom';
 import { getSessionById } from '../features/sessions/sessionSlice';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
-const formatDuration = (start, end) => {
+const formatDuration = (start, end, pauseTimeMS = 0) => {
     if (!start || !end) return 'N/A';
-    const diff = new Date(end) - new Date(start);
+    let diff = new Date(end) - new Date(start);
+    diff = Math.max(0, diff - pauseTimeMS);
     const seconds = Math.floor(diff / 1000);
     const minutes = Math.floor(seconds / 60);
     return `${minutes}m ${seconds % 60}s`;
@@ -27,9 +32,7 @@ const formatIdealAnswer = (text) => {
     if (!text || text === "pending") return "Model explanation not generated.";
     try {
         let cleanText = text.trim();
-        if (cleanText.startsWith('```')) {
-            cleanText = cleanText.replace(/^```(json|javascript|python)?/, '').replace(/```$/, '').trim();
-        }
+        // If the AI accidentally returned nested JSON string instead of raw text, extract it
         if (cleanText.startsWith('{') && cleanText.endsWith('}')) {
             const parsed = JSON.parse(cleanText);
             return parsed.idealAnswer || parsed.explanation || parsed.answer || cleanText;
@@ -100,7 +103,7 @@ function SessionReview() {
                     { label: 'Integrity', value: `${integrityScore}%`, color: integrityScore < 80 ? 'rose' : 'emerald', desc: `${violations} Violations` },
                     { label: 'Technical', value: `${finalMetrics.avgTechnical}%`, color: 'slate', desc: 'Average depth' },
                     { label: 'Communication', value: `${finalMetrics.avgConfidence}%`, color: 'slate', desc: 'Clarity & Confidence' },
-                    { label: 'Interview Time', value: formatDuration(startTime, endTime), color: 'slate', desc: 'Active Session' },
+                    { label: 'Interview Time', value: formatDuration(startTime, endTime, activeSession.pauseTimeMS || 0), color: 'slate', desc: 'Active Session' },
                     { label: 'Selection Chance', value: selectionOdds.label.split('(')[0], color: 'slate', desc: 'Market Probability' },
                 ].map((stat, i) => (
                     <div key={i} className={`bg-white p-6 rounded-[2.5rem] shadow-sm border-t-8 border-slate-900`}>
@@ -179,11 +182,52 @@ function SessionReview() {
                                     </div>
                                     <div className="space-y-3">
                                         <label className="text-[10px] font-black text-teal-600 uppercase tracking-[0.3em] block ml-2 text-center">AI Ideal Answer</label>
-                                        <div className="bg-slate-900 text-slate-400 rounded-[2.5rem] p-8 min-h-[150px] shadow-inner font-mono text-[11px] leading-relaxed overflow-x-auto whitespace-pre-wrap flex items-center">
-                                            {formatIdealAnswer(q.idealAnswer)}
+                                        <div className="bg-slate-900 text-slate-300 rounded-[2.5rem] p-8 min-h-[150px] shadow-inner text-sm leading-relaxed overflow-x-auto">
+                                            <ReactMarkdown 
+                                                remarkPlugins={[remarkGfm]}
+                                                components={{
+                                                    code({node, inline, className, children, ...props}) {
+                                                        const match = /language-(\w+)/.exec(className || '')
+                                                        return !inline && match ? (
+                                                        <SyntaxHighlighter
+                                                            style={vscDarkPlus}
+                                                            language={match[1]}
+                                                            PreTag="div"
+                                                            className="rounded-xl !my-4 !bg-slate-950 border border-slate-800"
+                                                            {...props}
+                                                        >
+                                                            {String(children).replace(/\n$/, '')}
+                                                        </SyntaxHighlighter>
+                                                        ) : (
+                                                        <code className="bg-slate-800 text-teal-300 px-1.5 py-0.5 rounded-md text-xs font-mono" {...props}>
+                                                            {children}
+                                                        </code>
+                                                        )
+                                                    },
+                                                    h1: ({node, ...props}) => <h1 className="text-xl font-bold text-white mb-4 mt-6 border-b border-slate-700 pb-2" {...props} />,
+                                                    h2: ({node, ...props}) => <h2 className="text-lg font-bold text-teal-400 mb-3 mt-5" {...props} />,
+                                                    h3: ({node, ...props}) => <h3 className="text-base font-bold text-slate-200 mb-2 mt-4" {...props} />,
+                                                    p: ({node, ...props}) => <p className="mb-4 last:mb-0" {...props} />,
+                                                    ul: ({node, ...props}) => <ul className="list-disc ml-6 mb-4 space-y-1 text-slate-300" {...props} />,
+                                                    ol: ({node, ...props}) => <ol className="list-decimal ml-6 mb-4 space-y-1 text-slate-300" {...props} />,
+                                                    li: ({node, ...props}) => <li className="pl-1" {...props} />
+                                                }}
+                                            >
+                                                {formatIdealAnswer(q.idealAnswer)}
+                                            </ReactMarkdown>
                                         </div>
                                     </div>
                                 </div>
+
+                                {/* AI Feedback */}
+                                {q.aiFeedback && (
+                                    <div className="space-y-3 pt-6 border-t border-slate-100 mt-6">
+                                        <label className="text-[10px] font-black text-rose-500 uppercase tracking-[0.3em] block ml-2">AI Feedback</label>
+                                        <div className="bg-rose-50 text-rose-700 rounded-[2rem] p-6 border border-rose-100 text-xs font-medium leading-relaxed">
+                                            {q.aiFeedback}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))}

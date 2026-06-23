@@ -410,6 +410,7 @@ const calculateOverallScore = async (sessionId) => {
 const endSession = asyncHandler(async (req, res) => {
     const sessionId = req.params.id;
     const userId = req.user._id;
+    const { violations } = req.body;
 
     const session = await Session.findById(sessionId);
 
@@ -428,6 +429,9 @@ const endSession = asyncHandler(async (req, res) => {
     }
 
     // Calculate scores for evaluated questions
+    if (violations !== undefined) {
+        session.violations = Number(violations);
+    }
     const scoreSummary = await calculateOverallScore(sessionId);
 
     session.overallScore = scoreSummary.overallScore || 0;

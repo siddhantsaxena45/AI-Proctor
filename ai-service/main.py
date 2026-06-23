@@ -16,6 +16,7 @@ load_dotenv()
 
 AI_SERVICE_PORT = int(os.getenv("AI_SERVICE_PORT",8000))
 OLLAMA_MODEL_NAME=os.getenv("OLLAMA_MODEL_NAME","mistral")
+OLLAMA_MODEL_NAME="phi3"
 
 app=FastAPI(title="AI Interviewer Microservice",version="1.0")
 
@@ -31,9 +32,9 @@ app.add_middleware(
 WHISPER_MODEL=None
 
 try:
-    print("Loading Whisper Model ...")
-    WHISPER_MODEL=whisper.load_model("base.en")
-    print("Whisper Model Loaded Successfully")
+    print("Loading Whisper model...")
+    WHISPER_MODEL = whisper.load_model("tiny.en")
+    print("Whisper model loaded successfully!")
 except Exception as e:
     print("Error while loading Whisper Model")
     print(e)
@@ -92,37 +93,58 @@ async def generate_questions(request:QuestionResquest):
         else :
             intruction="All questions MUST be conceptual oral questions. Do Not generate any coding or implementation challenges."
 
-            system_prompt=(
-                "You are an expert technical interviewer. "
-                "Task: Generate interview questions. "
-                "CRITICAL: Do NOT include any introductory phrases like 'To help you understand...' or 'Here is a question:'. "
-                "CRITICAL: Start immediately with the question body. "
-                f"Instructions: {intruction} "
-                "Respond ONLY with a JSON object containing a 'questions' array of strings."
-            )
+        system_prompt=(
+            "You are an expert technical interviewer. "
+            "Task: Generate interview questions. "
+            "CRITICAL: Do NOT include any introductory phrases like 'To help you understand...' or 'Here is a question:'. "
+            "CRITICAL: Start immediately with the question body. "
+            f"Instructions: {intruction} "
+            "Respond ONLY with a JSON object containing a 'questions' array of strings."
+        )
 
-            user_prompt=(
-                f"Generate exactly {request.count} unique, comprehensive interview questions for a {request.level} level {request.role}. "
-                "Preserve all necessary code context or scenario details within the single question string."
-            )
-            response=ollama.generate(
-                model=OLLAMA_MODEL_NAME,
-                prompt=user_prompt,
-                system=system_prompt,
-                format="json",
-                options={"temperature":0.6}
-            )
+        user_prompt=(
+            f"Generate exactly {request.count} unique, comprehensive interview questions for a {request.level} level {request.role}. "
+            "Preserve all necessary code context or scenario details within the single question string."
+        )
+        response=ollama.generate(
+            model=OLLAMA_MODEL_NAME,
+            prompt=user_prompt,
+            system=system_prompt,
+            format="json",
+            options={"temperature":0.6}
+        )
 
-            response_data = json.loads(response['response'].strip())
-            questions = response_data.get('questions', [])
+        response_text = response['response'].strip()
+        try:
+            response_data = json.loads(response_text)
+        except json.JSONDecodeError:
+            import re
+            # Try to strip markdown backticks if present
+            clean_text = re.sub(r'^```(?:json)?|```$', '', response_text).strip()
+            try:
+                response_data = json.loads(clean_text)
+            except Exception as e2:
+                print(f"Failed to parse JSON: {response_text}")
+                raise Exception(f"JSON Parse Error: {str(e2)}. Raw text: {response_text}")
+
+        questions = response_data.get('questions', [])
+        
+        # Fallback if AI didn't return an array but a string
+        if isinstance(questions, str):
+            questions = [questions]
             
-            # Fallback if AI didn't return an array but a string
-            if isinstance(questions, str):
-                questions = [questions]
-                
-            return QuestionResponse(questions=questions[:request.count], model_used=OLLAMA_MODEL_NAME)
+        # Ensure all items are strings (Models sometimes return array of objects)
+        clean_questions = []
+        for q in questions:
+            if isinstance(q, dict):
+                clean_questions.append(q.get('question') or q.get('text') or list(q.values())[0])
+            else:
+                clean_questions.append(str(q))
+            
+        return QuestionResponse(questions=clean_questions[:request.count], model_used=OLLAMA_MODEL_NAME)
 
     except Exception as e:
+        print(f"generate_questions error: {e}")
         raise HTTPException(status_code=500,detail=str(e))
     
 @app.post("/generate-next-question")
@@ -154,7 +176,14 @@ async def generate_next_question(request:NextQuestionRequest):
             options={"temperature":0.7}
         )
 
-        next_q_data = json.loads(response['response'].strip())
+        response_text = response['response'].strip()
+        try:
+            next_q_data = json.loads(response_text)
+        except json.JSONDecodeError:
+            import re
+            clean_text = re.sub(r'^```(?:json)?|```$', '', response_text).strip()
+            next_q_data = json.loads(clean_text)
+
         return {"question": next_q_data.get('question', ""), "questionType": next_q_data.get('questionType', 'oral')}
 
     except Exception as e:
@@ -171,7 +200,7 @@ async def transcribe_audio(file:UploadFile=File(...)):
         if not WHISPER_MODEL:
             raise HTTPException(status_code=503,detail="Whisper Model is not loaded")
         
-        result=WHISPER_MODEL.transcribe(temp_audio_path)
+        result=WHISPER_MODEL.transcribe(temp_audio_path, condition_on_previous_text=False)
                 
         os.remove(temp_audio_path)
         return {"transcription":result["text"].strip()}
@@ -224,20 +253,20 @@ async def evaluate(request:EvaluationRequest):
         response_text=response['response'].strip()
         try:
             evaluation_data=json.loads(response_text)
-            if 'idealAnswer' in evaluation_data and not isinstance(evaluation_data['idealAnswer'],str):
-                evaluation_data['idealAnswer']=json.dumps(evaluation_data['idealAnswer'])
-            return EvaluationResponse(**evaluation_data)
         except json.JSONDecodeError:
             import re
-            fixed_text=re.sub(r'[\r\n\t]',' ',response_text)
+            # Strip markdown code blocks
+            clean_text = re.sub(r'^```(?:json)?|```$', '', response_text).strip()
+            fixed_text = re.sub(r'[\r\n\t]',' ', clean_text)
             try :
                 evaluation_data=json.loads(fixed_text)
-                if 'idealAnswer' in evaluation_data and not isinstance(evaluation_data['idealAnswer'],str):
-                    evaluation_data['idealAnswer']=json.dumps(evaluation_data['idealAnswer'])
-                return EvaluationResponse(**evaluation_data)
-            except :
-                print(f"Failed to parse response: {response_text}")
+            except Exception as e:
+                print(f"Evaluate parse error: {e}. Raw text: {response_text}")
                 return EvaluationResponse(technicalScore=0,confidenceScore=0,aiFeedback="Failed to parse response",idealAnswer="Failed to parse response")
+                
+        if 'idealAnswer' in evaluation_data and not isinstance(evaluation_data['idealAnswer'],str):
+            evaluation_data['idealAnswer']=json.dumps(evaluation_data['idealAnswer'])
+        return EvaluationResponse(**evaluation_data)
 
     except Exception as e:
         print(f"Failed to generate response: {e}")
