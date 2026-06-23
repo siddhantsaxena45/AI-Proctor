@@ -14,7 +14,7 @@ start cmd /k "ollama run mistral"
 REM ===============================
 REM Start AI Service (FastAPI)
 REM ===============================
-start cmd /k "cd ai-service && venv\Scripts\activate && python main.py"
+start cmd /k "cd ai-service && call venv\Scripts\activate && python main.py"
 
 REM ===============================
 REM Start Frontend
